@@ -1,259 +1,162 @@
-
-/**
-* MODULE DEPENDENCIES
-* -------------------------------------------------------------------------------------------------
-* include any modules you will use through out the file
-**/
-
-var express = require('express')
-  , http = require('http')
-  , nconf = require('nconf')
-  , path = require('path')
-  , everyauth = require('everyauth')
-  , Recaptcha = require('recaptcha').Recaptcha;
-
-
-/**
-* CONFIGURATION
-* -------------------------------------------------------------------------------------------------
-* load configuration settings from ENV, then settings.json.  Contains keys for OAuth logins. See 
-* settings.example.json.  
-**/
-nconf.env().file({ file: 'settings.json' });
-
-
-
-/**
-* EVERYAUTH AUTHENTICATION
-* -------------------------------------------------------------------------------------------------
-* allows users to log in and register using OAuth services
-**/
-
-everyauth.debug = true;
-
-// Configure local password auth
-var usersById = {},
-    nextUserId = 0,
-    usersByFacebookId = {},
-    usersByTwitId = {},
-    usersByLogin = {
-        'user@example.com': addUser({ email: 'user@example.com', password: 'azure' })
-    };
-
-everyauth.
-    everymodule.
-    findUserById(function (id, callback) {
-        callback(null, usersById[id]);
-    });
-
-
-/**
-* FACEBOOK AUTHENTICATION
-* -------------------------------------------------------------------------------------------------
-* uncomment this section if you want to enable facebook authentication.  To use this, you will need
-* to get a facebook application Id and Secret, and add those to settings.json.  See:
-* http://developers.facebook.com/
-**/
-
-//everyauth.
-//    facebook.
-//    appId(nconf.get('facebook:applicationId')).
-//    appSecret(nconf.get('facebook:applicationSecret')).
-//    findOrCreateUser(
-//	function (session, accessToken, accessTokenExtra, fbUserMetadata) {
-//	    return usersByFacebookId[fbUserMetadata.claimedIdentifier] ||
-//		(usersByFacebookId[fbUserMetadata.claimedIdentifier] =
-//		 addUser('facebook', fbUserMetadata));
-//	}).
-//    redirectPath('/');
-
-
-/**
-* TWITTER AUTHENTICATION
-* -------------------------------------------------------------------------------------------------
-* uncomment this section if you want to enable twitter authentication.  To use this, you will need
-* to get a twitter key and secret, and add those to settings.json.  See:
-* https://dev.twitter.com/
-**/
-
-//everyauth
-//  .twitter
-//    .consumerKey(nconf.get('twitter:consumerKey'))
-//    .consumerSecret(nconf.get('twitter:consumerSecret'))
-//    .findOrCreateUser(function (sess, accessToken, accessSecret, twitUser) {
-//        return usersByTwitId[twitUser.id] || (usersByTwitId[twitUser.id] = addUser('twitter', twitUser));
-//    })
-//    .redirectPath('/');
-
-
-
-/**
-* USERNAME & PASSWORD AUTHENTICATION
-* -------------------------------------------------------------------------------------------------
-* this section provides basic in-memory username and password authentication
-**/
-
-everyauth
-  .password
-    .loginWith('email')
-    .getLoginPath('/login')
-    .postLoginPath('/login')
-    .loginView('account/login')
-    .loginLocals(function (req, res, done) {
-        setTimeout(function () {
-            done(null, {
-                title: 'login.  '
-            });
-        }, 200);
-    })
-    .authenticate(function (login, password) {
-        var errors = [];
-        if (!login) errors.push('Missing login');
-        if (!password) errors.push('Missing password');
-        if (errors.length) return errors;
-        var user = usersByLogin[login];
-        if (!user) return ['Login failed'];
-        if (user.password !== password) return ['Login failed'];
-        return user;
-    })
-    .getRegisterPath('/register')
-    .postRegisterPath('/register')
-    .registerView('account/register')
-    .registerLocals(function (req, res, done) {
-        setTimeout(function () {
-            done(null, {
-                title: 'Register.  ',
-                recaptcha_form: (new Recaptcha(nconf.get('recaptcha:publicKey'), nconf.get('recaptcha:privateKey'))).toHTML()
-            });
-        }, 200);
-    })
-    .extractExtraRegistrationParams(function (req) {
-        return {
-            confirmPassword: req.body.confirmPassword,
-            data: {
-                remoteip: req.connection.remoteAddress,
-                challenge: req.body.recaptcha_challenge_field,
-                response: req.body.recaptcha_response_field
-            }
-        }
-    })
-    .validateRegistration(function (newUserAttrs, errors) {
-        var login = newUserAttrs.login;
-        var confirmPassword = newUserAttrs.confirmPassword;
-        if (!confirmPassword) errors.push('Missing password confirmation')
-        if (newUserAttrs.password != confirmPassword) errors.push('Passwords must match');
-        if (usersByLogin[login]) errors.push('Login already taken');
-
-        // validate the recaptcha 
-        var recaptcha = new Recaptcha(nconf.get('recaptcha:publicKey'), nconf.get('recaptcha:privateKey'), newUserAttrs.data);
-        recaptcha.verify(function (success, error_code) {
-            if (!success) {
-                errors.push('Invalid recaptcha - please try again');
-            }
-        });
-        return errors;
-    })
-    .registerUser(function (newUserAttrs) {
-        var login = newUserAttrs[this.loginKey()];
-        return usersByLogin[login] = addUser(newUserAttrs);
-    })
-    .loginSuccessRedirect('/')
-    .registerSuccessRedirect('/');
-
-// add a user to the in memory store of users.  If you were looking to use a persistent store, this
-// would be the place to start
-function addUser(source, sourceUser) {
-    var user;
-    if (arguments.length === 1) {
-        user = sourceUser = source;
-        user.id = ++nextUserId;
-        return usersById[nextUserId] = user;
-    } else { // non-password-based
-        user = usersById[++nextUserId] = { id: nextUserId };
-        user[source] = sourceUser;
-    }
-    return user;
-}
-
-
-
+// var Connection = require('tedious').Connection;
+// // var sql = require('mssql');
+// var Request = require('tedious').Request;
+// // Create connection to database
+var express = require("express");
+var bodyParser = require("body-parser");
+var sql = require("mssql");
 var app = express();
-app.configure(function () {
-    app.set('port', process.env.PORT || 3000);
-    app.set('views', __dirname + '/views');
-    app.set('view engine', 'jade');
-    app.use(express.favicon());
-    app.use(express.logger('dev'));
-    app.use(express.bodyParser());
-    app.use(express.methodOverride());
-    app.use(express.cookieParser('azure zomg'));
-    app.use(express.session());
-    app.use(everyauth.middleware(app));
-    app.use(app.router);
-    app.use(require('less-middleware')({ src: __dirname + '/public' }));
-    app.use(express.static(path.join(__dirname, 'public')));
+app.use(bodyParser.urlencoded({
+    extended: true
+}));
+// Setting Base directory
+app.use(bodyParser.json());
+
+//CORS Middleware
+app.use(function (req, res, next) {
+    //Enabling CORS 
+     // Website you wish to allow to connect
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    // Request methods you wish to allow
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+
+    // Request headers you wish to allow
+    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type');
+
+    // Set to true if you need the website to include cookies in the requests sent
+    // to the API (e.g. in case you use sessions)
+    res.setHeader('Access-Control-Allow-Credentials', true);
+
+    // Pass to next layer of middleware
+    next();
+    // res.header("Access-Control-Allow-Origin", "http://localhost:8888");
+    // res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS,POST,PUT");
+    // res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, contentType,Content-Type, Accept, Authorization");
+    // next();
 });
+// Server=tcp:firerock.database.windows.net,1433;
+//Initial Catalog=CabBooking;Persist Security Info=False;User ID={your_username};Password={your_password};
+//MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
+var config = {
+    user: 'satyams',
+    password: 'Citiustech@1234',
+    server: 'tcp:firerock.database.windows.net,1433',
+    database: 'cabbooking',
+    dialect: "mssql",
+    options: {
+        truestedConnection: true,
+        encrypt: true // Use this if you're on Windows Azure
+    },
+    // dialectOptions: {
+    //     instanceName: "SQLEXPRESS"
+    // }
+};
+app.get("/booking", function (req, res) {
+   console.log(req.query);
+    sql.connect(config, function (err) {
 
-app.configure('development', function () {
-    app.use(express.errorHandler());
-});
+        if (err) console.log(err);
 
-/**
-* ROUTING
-* -------------------------------------------------------------------------------------------------
-* include a route file for each major area of functionality in the site
-**/
-require('./routes/home')(app);
-require('./routes/account')(app);
+        // create Request object
+        //  var request = new sql.Request();
 
+        //3.
+        var request = new sql.Request();
+        request.input('Action', sql.VarChar, 'Get')
+        request.input('FromStation', sql.VarChar, req.query.FromStation)
+        request.input('ToStation', sql.VarChar,req.query.ToStation)
+            .execute("USP_CabBooking").then(function (recordSet) {
+                res.send(recordSet);
+                sql.close()
+            }).catch(function (err) {
+                console.log(err);
+                sql.close()
+            });
+        //     }).catch(function (err) {
+        //             //6.
+        //             console.log(err);
+        //     });
 
-var server = http.createServer(app);
+        // query to the database and get the records
+        // request.query('select * from student', function (err, recordset) {
 
-/**
-* CHAT / SOCKET.IO 
-* -------------------------------------------------------------------------------------------------
-* this shows a basic example of using socket.io to orchestrate chat
-**/
+        //     if (err) console.log(err)
 
-// socket.io configuration
-var buffer = [];
-var io = require('socket.io').listen(server);
+        //     // send records as a response
+        //     res.send(recordset);
 
-
-io.configure(function () {
-    io.set("transports", ["xhr-polling"]);
-    io.set("polling duration", 100);
-});
-
-io.sockets.on('connection', function (socket) {
-    socket.emit('messages', { buffer: buffer });
-    socket.on('setname', function (name) {
-        socket.set('name', name, function () {
-            socket.broadcast.emit('announcement', { announcement: name + ' connected' });
-        });
+        // });
     });
-    socket.on('message', function (message) {
-        socket.get('name', function (err, name) {
-            var msg = { message: [name, message] };
-            buffer.push(msg);
-            if (buffer.length > 15) buffer.shift();
-            socket.broadcast.emit('message', msg);
-        })
+});
+app.post("/booking", function (req, res) {
+    console.log(req.body.id);
+    // connect to your database
+    sql.connect(config, function (err) {
+        // console.log(err);
+
+        if (err) {
+            console.log(err)
+            sql.close()
+        };
+
+        var request = new sql.Request();
+        request.input('Action', sql.VarChar, 'Insert')
+        request.input('CABID', sql.Int, req.body.Id)
+        request.input('TRAVLLERNAME', sql.VarChar, 'rupak')
+            .execute("USP_CabBooking").then(function (recordSet) {
+                res.send(recordSet);
+                sql.close()
+            }).catch(function (err) {
+                console.log(err);
+                sql.close()
+            });
+
     });
-    socket.on('disconnect', function () {
-        socket.get('name', function (err, name) {
-            socket.broadcast.emit('announcement', { announcement: name + ' disconnected' });
-        })
-    })
+});
+app.put("/booking", function (req, res) {
+    console.log(req.body);
+    // connect to your database
+    sql.connect(config, function (err) {
+        // console.log(err);
+
+        if (err) {
+            console.log(err)
+            sql.close()
+        };
+
+        var request = new sql.Request();
+        request.input('Action', sql.VarChar, 'Update')
+        request.input('CABID', sql.Int, req.body.Tid)
+        request.input('TRAVLLERNAME', sql.VarChar, 'rupak')
+            .execute("USP_CabBooking").then(function (recordSet) {
+                res.send(recordSet);
+                sql.close()
+            }).catch(function (err) {
+                console.log(err);
+                sql.close()
+            });
+
+    });
+});
+app.get("/bookingList", function (req, res) {
+    sql.connect(config, function (err) {
+
+        if (err) console.log(err);
+
+        var request = new sql.Request();
+        request.input('Action', sql.VarChar, 'BookingList')
+            .execute("USP_CabBooking").then(function (recordSet) {
+                res.send(recordSet);
+                sql.close()
+            }).catch(function (err) {
+                console.log(err);
+                sql.close()
+            });
+    });
 });
 
+var server = app.listen(5000, function () {
 
-/**
-* RUN
-* -------------------------------------------------------------------------------------------------
-* this starts up the server on the given port
-**/
-
-server.listen(app.get('port'), function () {
-    console.log("Express server listening on port " + app.get('port'));
+    console.log('Server is running..');
 });
